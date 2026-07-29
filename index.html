@@ -35,15 +35,15 @@
   code { background: #f4f4f5; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
   .embed-wrap { border: 1px dashed #d4d4d8; border-radius: 8px; padding: 12px; margin: 12px 0; min-height: 60px; }
   iframe.embed { width: 100%; height: 560px; border: 0; background: #fff; border-radius: 8px; }
-  input, select { font-family: ui-monospace, monospace; font-size: 13px; padding: 7px 8px; border: 1px solid #d4d4d8; border-radius: 6px; box-sizing: border-box; }
+  input, select { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; padding: 7px 8px; border: 1px solid #d4d4d8; border-radius: 6px; box-sizing: border-box; }
   select { font-family: system-ui, sans-serif; }
   label { font-size: 12px; color: #71717a; display: block; margin: 10px 0 4px; }
   button { font-size: 13px; padding: 7px 16px; border-radius: 6px; border: 1px solid #d4d4d8; background: #fff; cursor: pointer; }
   button.primary { border: 0; background: #0f766e; color: #fff; }
   button:hover { background: #f4f4f5; }
   button.primary:hover { background: #115e59; }
-  form { display: grid; gap: 12px; }
-  form > div { width: 100%; min-width: 0; }
+  form { display: flex; flex-direction: column; gap: 8px; }
+  form > div { width: 100%; }
   .hint { font-size: 12px; color: #a1a1aa; }
   .target { font-size: 12px; color: #a1a1aa; margin-top: 24px; }
   pre { background: #f4f4f5; padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
@@ -92,7 +92,7 @@
       <option value="podcast">podcast</option>
     </select>
   </div>
-  <div style="flex:2;min-width:220px;">
+  <div>
     <label for="id">Entity UUID (must be public + exist in dev DB)</label>
     <input id="id" type="text" placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000" autocomplete="off" />
   </div>
@@ -145,32 +145,11 @@
   </li>
   <li>
     <strong>Serve over HTTPS</strong> (not <code>file://</code> — the origin check needs a real
-    origin, and popups / secure-context APIs need HTTPS). Easiest free option: drag this one
-    file onto <a href="https://app.netlify.com/drop" target="_blank" rel="noopener">Netlify Drop</a>
-    → you get a <code>https://&lt;name&gt;.netlify.app</code> URL on a different domain in
-    seconds. See <em>Deploy</em> below.
+    origin, and popups / secure-context APIs need HTTPS). This page is already deployed on a
+    different-domain HTTPS host (GitHub Pages), which is what makes the embed genuinely
+    cross-origin — the whole point.
   </li>
 </ol>
-
-<h2>Deploy — free, different domain, default subdomain</h2>
-<p class="hint" style="margin-bottom:10px;">Pick any one. All serve HTTPS on a subdomain that is NOT
-<code>properhealth.io</code>, which is what makes the embed genuinely cross-origin (the whole point).</p>
-<ul>
-  <li><strong>Netlify Drop (fastest)</strong> — drag this file onto
-    <a href="https://app.netlify.com/drop" target="_blank" rel="noopener">app.netlify.com/drop</a>.
-    You get <code>https://&lt;random&gt;.netlify.app</code> immediately. Sign in and rename the
-    site to a stable subdomain so the allowlist entry (Setup #1) doesn't need redoing each time.</li>
-  <li><strong>GitHub Pages (most durable)</strong> — push this file to a public repo (e.g.
-    <code>properhealth-embed-test</code>), enable Pages on the main branch →
-    <code>https://&lt;user&gt;.github.io/properhealth-embed-test/embed-host-dev.html</code>. Stable URL, free, HTTPS.</li>
-  <li><strong>Cloudflare Pages / Vercel</strong> — same idea: connect the repo or upload the file →
-    <code>https://&lt;project&gt;.pages.dev</code> / <code>https://&lt;project&gt;.vercel.app</code>.</li>
-</ul>
-<p class="hint">Or run it locally (same-origin-to-localhost, still cross-origin to dev):
-  <code>python3 -m http.server 8080</code> in this directory, then open
-  <code>http://localhost:8080/embed-host-dev.html</code> and add <code>http://localhost:8080</code>
-  to the allowlist. Localhost is HTTP — fine for the origin check, but some browsers restrict
-  popups/secure-context on HTTP; HTTPS via a host above is more reliable.</p>
 
 <p class="target">
   Targets: API = <code>https://api.dev.properhealth.io</code> ·
@@ -218,7 +197,23 @@ function render(element, type, id) {
     return;
   }
   if (element === 'iframe' && !IFRAME_TYPES.has(type)) {
-    slot.innerHTML = `<span class="hint"><code>&lt;properhealth-iframe&gt;</code> supports only intervention/protocol/question/post (not <code>${type}</code>). Use the <em>widget</em> element for podcast.</span>`;
+    // Podcast is not a single embeddable resource — it's a LIST of
+    // interventions. The interactive iframe embeds one resource (sign-in
+    // popup → vote/comment); there's no /iframes/podcasts route and
+    // resolveIframePath() returns null for podcast. Podcast renders only as a
+    // read-only <properhealth-widget> list (click an intervention → in-page
+    // modal). So this isn't a page limitation — it's how the embed system works.
+    slot.innerHTML = `<span class="hint"><code>&lt;properhealth-iframe&gt;</code> embeds a single
+      resource (intervention/protocol/question/post) with the sign-in popup.
+      <code>${type}</code> is a <em>list</em> (a podcast = a list of interventions), so it has no
+      single-resource iframe route. Use the <em>widget</em> element for it —
+      <button id="switchToWidget" type="button" style="font-size:12px;padding:2px 8px;margin-left:4px;">switch to widget + ${type}</button>.</span>`;
+    const sw = document.getElementById('switchToWidget');
+    if (sw) sw.addEventListener('click', () => {
+      document.getElementById('element').value = 'widget';
+      syncUrl({ element: 'widget', type, id });
+      render('widget', type, id);
+    });
     return;
   }
   if (element === 'widget' && !WIDGET_TYPES.has(type)) {
