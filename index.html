@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProperHealth embed host — AWS dev test</title>
+<!--
+  Standalone EXTERNAL-HOST stand-in for testing the ProperHealth embed system
+  against the AWS dev stack. This is the static, dev-targeting port of the e2e
+  harness `e2e/embed-host.mjs` — it loads the REAL web-widget bundle served by
+  the dev web app and renders the REAL custom elements (`<properhealth-iframe>`
+  for interactive embeds, `<properhealth-widget>` for read-only cards / podcast
+  list), exactly as a real host site does. No local build required: the bundle
+  is pulled from https://dev.properhealth.io/widget/widget.js (served by the
+  dev web's Docker build → web/public/widget/).
+
+  One page covers every embed scenario via query params / the form below:
+    ?element=iframe&type=intervention&id=<uuid>  → interactive iframe (Bearer transport, popup sign-in)
+    ?element=widget&type=podcast&id=<podcast-id>   → read-only podcast list → in-page modal
+    ?element=widget&type=protocol&id=<uuid>        → read-only card → "View" opens dev web in a new tab
+    type ∈ intervention | protocol | question | post | podcast  (iframe: no podcast)
+
+  BEFORE IT WORKS: the origin serving THIS page must be added to dev's embed
+  allowlist — see Setup at the bottom. The /embed/* controller (api) gates ALL
+  embed requests (interactive + read-only) on that allowlist and sets CORS
+  dynamically per allowed origin, so one allowlist entry covers both elements.
+-->
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
+  h1 { font-size: 18px; }
+  h2 { font-size: 15px; margin-top: 32px; border-top: 1px solid #e5e5e5; padding-top: 16px; }
+  .note { background: #fff7e6; border: 1px solid #ffd591; border-radius: 8px; padding: 12px 14px; font-size: 13px; line-height: 1.5; }
+  .origin-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin: 12px 0; }
+  .origin-box code { font-size: 13px; }
+  code { background: #f4f4f5; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .embed-wrap { border: 1px dashed #d4d4d8; border-radius: 8px; padding: 12px; margin: 12px 0; min-height: 60px; }
+  iframe.embed { width: 100%; height: 560px; border: 0; background: #fff; border-radius: 8px; }
+  input, select { font-family: ui-monospace, monospace; font-size: 13px; padding: 7px 8px; border: 1px solid #d4d4d8; border-radius: 6px; box-sizing: border-box; }
+  select { font-family: system-ui, sans-serif; }
+  label { font-size: 12px; color: #71717a; display: block; margin: 10px 0 4px; }
+  button { font-size: 13px; padding: 7px 16px; border-radius: 6px; border: 1px solid #d4d4d8; background: #fff; cursor: pointer; }
+  button.primary { border: 0; background: #0f766e; color: #fff; }
+  button:hover { background: #f4f4f5; }
+  button.primary:hover { background: #115e59; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  form > div { flex: 1; min-width: 140px; }
+  .hint { font-size: 12px; color: #a1a1aa; }
+  .target { font-size: 12px; color: #a1a1aa; margin-top: 24px; }
+  pre { background: #f4f4f5; padding: 8px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
+  ul { font-size: 13px; line-height: 1.6; padding-left: 20px; }
+  ol { font-size: 13px; line-height: 1.6; padding-left: 20px; }
+  .pill { font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 999px; }
+</style>
+</head>
+<body>
+
+<h1>ProperHealth embed host <span class="pill">AWS dev</span></h1>
+
+<div class="note">
+  This is an <strong>external host site</strong> stand-in. It loads the real
+  <code>web-widget</code> bundle from the dev web app and renders the real
+  custom elements — the same host behavior the e2e suite
+  (<code>e2e/embed-host.mjs</code>) exercises. Because this page's origin
+  differs from <code>dev.properhealth.io</code>, an embedded iframe is
+  cross-origin, so <code>isEmbeddedContext()</code> is true and the Bearer
+  transport fires (cookies are blocked in a cross-origin iframe → popup
+  handoff → <code>Authorization: Bearer</code>).
+</div>
+
+<div class="origin-box">
+  This page's origin: <code id="selfOrigin">…</code>
+  <button id="copyOrigin" style="margin-left:8px;font-size:11px;padding:2px 8px;">Copy</button>
+  <div class="hint" style="margin-top:6px;">↑ Add this exact origin to dev's embed allowlist (Setup #1). The embed
+    shows <code>"Origin not allowed"</code> / BlockedEmbed until you do.</div>
+</div>
+
+<form id="f" onsubmit="return false;">
+  <div>
+    <label for="element">Element</label>
+    <select id="element">
+      <option value="iframe">iframe (interactive — sign in / vote / comment)</option>
+      <option value="widget">widget (read-only card / podcast list)</option>
+    </select>
+  </div>
+  <div>
+    <label for="type">Type</label>
+    <select id="type">
+      <option value="intervention">intervention</option>
+      <option value="protocol">protocol</option>
+      <option value="question">question</option>
+      <option value="post">post</option>
+      <option value="podcast">podcast</option>
+    </select>
+  </div>
+  <div style="flex:2;min-width:220px;">
+    <label for="id">Entity UUID (must be public + exist in dev DB)</label>
+    <input id="id" type="text" placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000" autocomplete="off" />
+  </div>
+  <div>
+    <label>&nbsp;</label>
+    <button id="renderBtn" class="primary" type="submit">Render embed</button>
+  </div>
+</form>
+
+<h2>Embed</h2>
+<div class="embed-wrap" id="slot">
+  <span class="hint">Pick an element + type, paste a real dev UUID, and click <em>Render embed</em>.</span>
+</div>
+
+<h2>What to test</h2>
+<ul>
+  <li><strong>Interactive iframe</strong> (intervention/protocol/question/post): renders the
+    "Sign in to join the discussion" affordance → click <em>Sign in</em> → a popup opens on
+    <code>dev.properhealth.io</code>. If you're already logged into the dev web in this
+    browser, the popup auto-completes (reuses the session cookie); otherwise it shows the
+    email/password form. After the popup closes, click <em>Upvote</em> / write a comment —
+    the request carries <code>Authorization: Bearer</code> and <strong>no</strong> cookie
+    (open DevTools → Network to confirm the credential shape).</li>
+  <li><strong>Read-only widget</strong> (intervention/protocol/question/post): the card renders →
+    "View" / "View full discussion →" opens the public dev web detail page in a new tab.</li>
+  <li><strong>Read-only podcast</strong>: the list renders the podcast's interventions → click a
+    row → an in-page modal opens (no new tab) with a "Personalise" lead-capture button.</li>
+  <li><strong>Regression</strong>: the host page itself is never redirected to <code>/login</code>
+    on a 401 inside the iframe — the embed re-shows "Sign in" and the host stays put.</li>
+</ul>
+
+<h2 id="setup">Setup — what to enable in AWS dev</h2>
+<ol>
+  <li>
+    <strong>Add THIS page's origin to the embed allowlist.</strong><br/>
+    Sign in to the dev admin portal →
+    <code>https://dev.properhealth.io/admin/system/embed-allowed-origins</code><br/>
+    Add the exact origin shown in the green box above, e.g.
+    <code>https://your-test.netlify.app</code> (no trailing slash, no path).<br/>
+    <em>The API's <code>/embed/*</code> controller checks the request <code>Origin</code> against
+    this list on every embed call and returns <code>403 Origin not allowed</code> otherwise.
+    When the allowlist has no rows at all, all origins are permitted — but dev already has
+    rows, so you must add yours.</em>
+  </li>
+  <li>
+    <strong>Find a real public entity UUID in dev.</strong> Pick any public intervention /
+    protocol / question / post (or a podcast id for the podcast list) from the dev DB
+    (admin UI or a DB query) and paste its <code>id</code> above. The embed only renders for
+    resources that exist and are embeddable (public, not private/followers-only).
+  </li>
+  <li>
+    <strong>Serve over HTTPS</strong> (not <code>file://</code> — the origin check needs a real
+    origin, and popups / secure-context APIs need HTTPS). Easiest free option: drag this one
+    file onto <a href="https://app.netlify.com/drop" target="_blank" rel="noopener">Netlify Drop</a>
+    → you get a <code>https://&lt;name&gt;.netlify.app</code> URL on a different domain in
+    seconds. See <em>Deploy</em> below.
+  </li>
+</ol>
+
+<h2>Deploy — free, different domain, default subdomain</h2>
+<p class="hint" style="margin-bottom:10px;">Pick any one. All serve HTTPS on a subdomain that is NOT
+<code>properhealth.io</code>, which is what makes the embed genuinely cross-origin (the whole point).</p>
+<ul>
+  <li><strong>Netlify Drop (fastest)</strong> — drag this file onto
+    <a href="https://app.netlify.com/drop" target="_blank" rel="noopener">app.netlify.com/drop</a>.
+    You get <code>https://&lt;random&gt;.netlify.app</code> immediately. Sign in and rename the
+    site to a stable subdomain so the allowlist entry (Setup #1) doesn't need redoing each time.</li>
+  <li><strong>GitHub Pages (most durable)</strong> — push this file to a public repo (e.g.
+    <code>properhealth-embed-test</code>), enable Pages on the main branch →
+    <code>https://&lt;user&gt;.github.io/properhealth-embed-test/embed-host-dev.html</code>. Stable URL, free, HTTPS.</li>
+  <li><strong>Cloudflare Pages / Vercel</strong> — same idea: connect the repo or upload the file →
+    <code>https://&lt;project&gt;.pages.dev</code> / <code>https://&lt;project&gt;.vercel.app</code>.</li>
+</ul>
+<p class="hint">Or run it locally (same-origin-to-localhost, still cross-origin to dev):
+  <code>python3 -m http.server 8080</code> in this directory, then open
+  <code>http://localhost:8080/embed-host-dev.html</code> and add <code>http://localhost:8080</code>
+  to the allowlist. Localhost is HTTP — fine for the origin check, but some browsers restrict
+  popups/secure-context on HTTP; HTTPS via a host above is more reliable.</p>
+
+<p class="target">
+  Targets: API = <code>https://api.dev.properhealth.io</code> ·
+  Web (bundle + iframe routes + popup) = <code>https://dev.properhealth.io</code> ·
+  Widget bundle = <code>https://dev.properhealth.io/widget/widget.js</code>
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<script>
+const DEV_WEB = 'https://dev.properhealth.io';
+const DEV_API = 'https://api.dev.properhealth.io';
+const WIDGET_SCRIPT = `${DEV_WEB}/widget/widget.js`;
+
+const IFRAME_TYPES = new Set(['intervention', 'protocol', 'question', 'post']);
+const WIDGET_TYPES = new Set(['intervention', 'protocol', 'question', 'post', 'podcast']);
+const PLURAL = { intervention: 'interventions', protocol: 'protocols', question: 'questions', post: 'posts' };
+const selfOrigin = window.location.origin;
+
+document.getElementById('selfOrigin').textContent = selfOrigin;
+document.getElementById('copyOrigin').addEventListener('click', async (e) => {
+  try { await navigator.clipboard.writeText(selfOrigin); e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy'), 1200); }
+  catch { /* clipboard blocked — the origin is already visible to copy manually */ }
+});
+
+// Load the REAL widget bundle from the dev web app. The bundle is an IIFE that
+// registers <properhealth-iframe> + <properhealth-widget> on load. Custom
+// elements auto-upgrade, so elements created before this resolves still work
+// once it loads. Track failure so we can fall back (iframe) / error (widget).
+let bundleState = 'loading'; // 'loading' | 'ready' | 'failed'
+let pendingRender = null;
+(function loadBundle() {
+  const s = document.createElement('script');
+  s.src = WIDGET_SCRIPT;
+  s.onload = () => { bundleState = 'ready'; console.log('[embed-host] widget.js loaded from', WIDGET_SCRIPT); if (pendingRender) { const p = pendingRender; pendingRender = null; render(p.element, p.type, p.id); } };
+  s.onerror = () => { bundleState = 'failed'; console.warn('[embed-host] widget.js failed to load from', WIDGET_SCRIPT, '— iframe falls back to a direct <iframe>; widget will error'); if (pendingRender) { const p = pendingRender; pendingRender = null; render(p.element, p.type, p.id); } };
+  document.head.appendChild(s);
+})();
+
+function render(element, type, id) {
+  const slot = document.getElementById('slot');
+  slot.innerHTML = '';
+
+  if (!id) {
+    slot.innerHTML = '<span class="hint">Paste a real entity UUID from dev, then click <em>Render embed</em>.</span>';
+    return;
+  }
+  if (element === 'iframe' && !IFRAME_TYPES.has(type)) {
+    slot.innerHTML = `<span class="hint"><code>&lt;properhealth-iframe&gt;</code> supports only intervention/protocol/question/post (not <code>${type}</code>). Use the <em>widget</em> element for podcast.</span>`;
+    return;
+  }
+  if (element === 'widget' && !WIDGET_TYPES.has(type)) {
+    slot.innerHTML = `<span class="hint"><code>&lt;properhealth-widget&gt;</code> doesn't support <code>${type}</code>.</span>`;
+    return;
+  }
+
+  if (bundleState === 'loading') pendingRender = { element, type, id };
+
+  if (element === 'iframe') {
+    const defined = bundleState === 'ready' && window.customElements && customElements.get('properhealth-iframe');
+    if (defined) {
+      const el = document.createElement('properhealth-iframe');
+      el.setAttribute('data-type', type);
+      el.setAttribute('data-id', id);
+      el.setAttribute('data-web-base', DEV_WEB);
+      el.setAttribute('data-show-logo', 'true');
+      slot.appendChild(el);
+      console.log('[embed-host] rendered <properhealth-iframe>', { type, id });
+    } else if (bundleState === 'failed') {
+      // Fallback: a direct <iframe> to the same URL the widget builds. Same
+      // auth flow (popup → handoff → Bearer), just no auto-resize. Matches the
+      // iframe route the dev web serves (plural paths).
+      const src = `${DEV_WEB}/iframes/${PLURAL[type]}/${encodeURIComponent(id)}`
+        + `?embedId=test-${Date.now()}`
+        + `&parentOrigin=${encodeURIComponent(selfOrigin)}`
+        + `&showLogo=true`;
+      const iframe = document.createElement('iframe');
+      iframe.className = 'embed';
+      iframe.src = src;
+      iframe.title = 'Proper Health interactive embed';
+      iframe.referrerPolicy = 'origin';
+      iframe.sandbox.add('allow-scripts', 'allow-forms', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox');
+      slot.appendChild(iframe);
+      console.warn('[embed-host] rendered direct <iframe> fallback (bundle failed):', src);
+    } else {
+      slot.innerHTML = '<span class="hint">Loading widget bundle…</span>';
+    }
+    return;
+  }
+
+  // widget (read-only card / podcast list) — fetches /embed/* from data-api-base.
+  const defined = bundleState === 'ready' && window.customElements && customElements.get('properhealth-widget');
+  if (defined) {
+    const el = document.createElement('properhealth-widget');
+    el.setAttribute('data-type', type);
+    el.setAttribute('data-id', id);
+    el.setAttribute('data-api-base', DEV_API);
+    el.setAttribute('data-web-base', DEV_WEB);
+    el.setAttribute('data-show-logo', 'true');
+    slot.appendChild(el);
+    console.log('[embed-host] rendered <properhealth-widget>', { type, id });
+  } else if (bundleState === 'failed') {
+    slot.innerHTML = `<span class="hint">Widget bundle failed to load from <code>${WIDGET_SCRIPT}</code>. Check the dev web is up and serving <code>/widget/widget.js</code>, then reload.</span>`;
+  } else {
+    slot.innerHTML = '<span class="hint">Loading widget bundle…</span>';
+  }
+}
+
+// Populate the form from the URL (?element=&type=&id=) so the URL is shareable,
+// then render. Defaults: interactive intervention iframe (the auth surface).
+function readParams() {
+  const p = new URLSearchParams(window.location.search);
+  return {
+    element: (p.get('element') || 'iframe').trim().toLowerCase(),
+    type: (p.get('type') || 'intervention').trim().toLowerCase(),
+    id: (p.get('id') || '').trim(),
+  };
+}
+function applyToForm({ element, type, id }) {
+  document.getElementById('element').value = element === 'widget' ? 'widget' : 'iframe';
+  document.getElementById('type').value = type;
+  document.getElementById('id').value = id;
+}
+function syncUrl({ element, type, id }) {
+  const u = new URL(window.location.href);
+  u.searchParams.set('element', element); u.searchParams.set('type', type);
+  if (id) u.searchParams.set('id', id); else u.searchParams.delete('id');
+  history.replaceState(null, '', u);
+}
+
+document.getElementById('f').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const element = document.getElementById('element').value;
+  const type = document.getElementById('type').value;
+  const id = document.getElementById('id').value.trim();
+  syncUrl({ element, type, id });
+  render(element, type, id);
+});
+
+const initial = readParams();
+applyToForm(initial);
+if (initial.id) render(initial.element, initial.type, initial.id);
+</script>
+
+</body>
+</html>
